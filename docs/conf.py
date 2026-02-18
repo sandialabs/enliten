@@ -47,5 +47,19 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', '.*', '**/.ipynb_checkpo
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
+# -- Autodoc options ---------------------------------------------------------
+
+# Show both the class docstring and the __init__ docstring
+autoclass_content = 'both'
+
+# If your docstrings use typing annotations, you may need this:
+# autoclass_content = 'init'
+# autodata_content = 'both'
+
+# -- Napoleon settings (if you use Google or NumPy style docstrings) ---------
+
+napoleon_google_docstring = True
+napoleon_numpy_docstring = True
+napoleon_include_init_with_doc = False
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
