@@ -1,93 +1,89 @@
 # ENLITEN
 
+ENLITEN is a technology-agnostic, hourly unit-commitment package for energy
+systems with any combination of generation and storage assets. Resource models
+(PV, CSP, wind, generators, and so on) stay upstream and provide an hourly
+power time series. The dispatcher only needs each asset's operating
+characteristics and charging relationships.
 
+## Install and test
 
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://cee-gitlab.sandia.gov/enliten_oss/enliten.git
-git branch -M main
-git push -uf origin main
+```powershell
+python -m pip install -e .
+python -m pytest
 ```
 
-## Integrate with your tools
+The focused regression suite covers the requested PV+BES, CSP+TES, and
+PV+CSP+BES+TES configurations. The test signatures were recorded by running
+the supplied legacy dispatcher on deterministic fixtures, then compared with
+the generic dispatcher. They intentionally do not depend on resource-model
+packages or Sandia-specific files.
 
-- [ ] [Set up project integrations](https://cee-gitlab.sandia.gov/enliten_oss/enliten/-/settings/integrations)
+## Run examples
 
-## Collaborate with your team
+```powershell
+python examples/pv_bes.py
+python examples/csp_tes.py
+python examples/pv_csp_bes_tes.py
+```
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+Each example prints an energy-flow summary and the first six hours of its
+auditable dispatch DataFrame. Replace the short deterministic profiles in
+`examples/common.py` with production resource and load time series when doing
+an application study.
 
-## Test and Deploy
+## Model
 
-Use the built-in continuous integration in GitLab.
+```python
+from enliten import Generation, Site, Storage, System
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+site = Site("plant")
+pv = Generation("pv", site, pv_mw, can_supply_load=True)
+battery = Storage(
+    "battery", site,
+    capacity_MWh=30,
+    power_rating_MW=10,
+    systems_charging=["pv"],
+    charge_efficiency={"pv": 0.92},
+    discharge_efficiency=0.92,
+    charge_rate_MW=10,
+)
+result = System(load_mw, [battery, pv]).timeseries
+```
 
-***
+Generation attributes describe an available power time series, whether it can
+directly serve electric load, and its connection site. Storage attributes
+describe capacity, charge/discharge limits, efficiencies, loss, starting
+state, reserve, and the *names* of allowable charging sources. A thermal store
+is the same `Storage` class as a battery; provide its thermal-to-electric
+conversion efficiency (constant or hourly sequence) as
+`discharge_efficiency`.
 
-# Editing this README
+Asset order is deliberate policy. Non-load-serving generators charge their
+compatible storage first. Load-serving generators serve load and then charge
+storage. Storage assets serve residual load in the order in which they are
+passed to `System`. This permits the old CSP->TES, PV->load/charge,
+TES->load, BES->load priority without technology-specific conditionals.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+## Storage reserve and the legacy BES line
 
-## Suggestions for a good README
+Storage capacity is fully dispatchable by default. Set
+`minimum_state_of_charge_MWh` when a reserve is required. The supplied legacy
+`system.py` computes a BES depth-of-discharge limit at line 931 but immediately
+overwrites it at line 936 with `bes_avail = max(0, bes_MWh)`. Its effective
+behavior is therefore full dispatchability; the generic PV+BES compatibility
+case states that behavior explicitly with the default zero reserve. No code
+line needs to be commented out.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+If a 30 MWh battery is meant to retain 20% state of charge, model that intent
+directly with `minimum_state_of_charge_MWh=6`; this will, correctly, differ
+from the legacy bug-compatible result.
 
-## Name
-Choose a self-explaining name for your project.
+## Scope of the comparison
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+The original archive does not include the ASGARD weather or load inputs used
+by its former notebooks. Consequently this repository verifies identical
+dispatch logic on deterministic fixtures, not the historical ASGARD annual
+outputs. To certify a production comparison, run the same input time series in
+separate legacy and generic environments and compare named load, charge,
+state-of-charge, export, and curtailment columns.
