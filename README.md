@@ -9,8 +9,9 @@ characteristics and charging relationships.
 ## Install and test
 
 ```powershell
-python -m pip install -e .
+python -m pip install -e ".[notebooks]"
 python -m pytest
+jupyter notebook examples
 ```
 
 The focused regression suite covers the requested PV+BES, CSP+TES, and
@@ -21,17 +22,16 @@ packages or Sandia-specific files.
 
 ## Run examples
 
-```powershell
-python examples/pv_bes.py
-python examples/csp_tes.py
-python examples/pv_csp_bes_tes.py
-python examples/csp_multiple_storage.py
-```
+Open the notebooks in `examples/`:
 
-Each example prints an energy-flow summary and the first six hours of its
-auditable dispatch DataFrame. Replace the short deterministic profiles in
-`examples/common.py` with production resource and load time series when doing
-an application study.
+- `pv_bes.ipynb` — PV + BES, TEA inputs, dispatch plots, and resilience.
+- `csp_tes.ipynb` — CSP + TES with thermal charging and electric load output.
+- `pv_csp_bes_tes.ipynb` — the combined four-technology configuration.
+- `csp_multiple_storage.ipynb` — one CSP asset charging thermal and electric
+  stores at distinct conversion efficiencies and rates.
+
+They use short deterministic fixtures from `examples/common.py`; replace those
+with production resource and load time series for an application study.
 
 ## Model
 
@@ -93,6 +93,40 @@ line needs to be commented out.
 If a 30 MWh battery is meant to retain 20% state of charge, model that intent
 directly with `minimum_state_of_charge_MWh=6`; this will, correctly, differ
 from the legacy bug-compatible result.
+
+## Metrics, resilience, and plotting
+
+`System.timeseries` is the auditable hourly ledger. `System.system_metrics()`
+(or its `tea_metrics()` alias) calculates the normal-operation totals and
+annualized TEA inputs directly from that ledger: system/load/grid/export MWh,
+capex, fixed O&M, variable O&M, electricity-sale revenue, grid-purchase cost,
+and `system_augment`. Annual values are scaled from non-calendar fixture data
+or grouped by calendar year when the input has a `DatetimeIndex`.
+
+Use `resilience_cases` to run grid-unavailable dispatch with the same asset and
+conversion-path model:
+
+```python
+cases = system.resilience_cases(
+    critical_load_MW=2.0,
+    target_hours=72,
+    n_starts=100,
+    seed=7,
+)
+print(system.resilience_summary)
+```
+
+Only assets with `off_grid_operation=True` participate. Each random start is
+evaluated using the normal-operation state of charge (`actual`) and a full-store
+counterfactual (`full`). The returned table contains durations, target-energy
+service, and unmet target energy; `resilience_summary` contains target-success
+rates and 10th/50th/90th-percentile metrics. Pass `start_hours=[...]` when the
+starts must be exactly prescribed instead of random.
+
+The original plotting workflow is available without importing plotting
+libraries until it is used: `timeseries_plot_source`,
+`timeseries_plot_group`, and `plot_storage_capacity` each return `(figure,
+axis)`. Matplotlib is installed with ENLITEN.
 
 ## Scope of the comparison
 

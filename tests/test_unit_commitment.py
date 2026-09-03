@@ -68,3 +68,59 @@ def test_reserve_is_an_explicit_storage_characteristic():
     result = System(pd.Series([10.0, 10.0], name="load_MW"), [storage]).timeseries
     assert result.loc[1, "storage_to_load_MWh_electric"] == pytest.approx(8)
     assert result.loc[1, "storage_MWh_electric"] == pytest.approx(2)
+
+
+def test_normal_metrics_provide_tea_ready_annual_inputs():
+    system = pv_bes_system(hours=16)
+    metrics = system.tea_metrics()
+
+    assert metrics["operating_hours"] == 15
+    assert metrics["unmet_load_MWh_electric"] == pytest.approx(0)
+    assert metrics["system_to_load_MWh_electric"] > 0
+    assert metrics["grid_to_load_MWh_electric"] > 0
+    assert len(metrics["system_to_load_annual_MWh_electric"]) == 1
+    assert len(metrics["annual_electricity_sales_USD"]) == 1
+    assert metrics["system_augment"] == metrics["system_augment_USD"]
+
+
+def test_resilience_supports_seeded_user_defined_random_starts_and_metrics():
+    system = pv_bes_system(hours=16)
+    cases = system.resilience_cases(
+        critical_load_MW=2.0, target_hours=4, n_starts=5, seed=42
+    )
+
+    assert len(cases) == 5
+    assert cases["start_hour"].tolist() == [3, 0, 8, 7, 7]
+    assert cases["actual_duration_hours"].between(0, 4).all()
+    assert cases["full_duration_hours"].between(0, 4).all()
+    assert system.resilience_summary["n_starts"] == 5
+    assert 0 <= system.resilience_summary["pct_meets_actual"] <= 100
+
+
+def test_resilience_can_use_explicit_starts_and_excludes_non_islandable_assets():
+    site = Site("site")
+    generator = Generation(
+        "grid_tied_pv", site, [0.0, 10.0, 10.0], "electric", off_grid_operation=False
+    )
+    system = System(pd.Series([1.0, 1.0, 1.0], name="load_MW"), [generator])
+
+    cases = system.resilience_cases(1.0, target_hours=2, start_hours=[0, 1])
+    assert cases["actual_duration_hours"].tolist() == [0, 0]
+    assert cases["full_duration_hours"].tolist() == [0, 0]
+
+
+def test_plot_functions_return_figures_without_displaying_them():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    system = pv_bes_system(hours=32)
+    figures = [
+        system.timeseries_plot_source(start_date=0, days=1),
+        system.timeseries_plot_group(start_date=0, days=1),
+        system.plot_storage_capacity(start_date=0, days=1),
+    ]
+    for figure, axis in figures:
+        assert figure.axes == [axis]
+        plt.close(figure)

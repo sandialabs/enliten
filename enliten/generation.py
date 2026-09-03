@@ -33,6 +33,7 @@ class Generation:
     off_grid_operation: bool = True
     capex: float | None = None
     opex: float | None = None
+    variable_opex_USD_per_MWh: float = 0.0
     land_area: float | None = None
 
     def __post_init__(self) -> None:
@@ -45,3 +46,5 @@ class Generation:
         )
         if self.power_priority_load_MW is not None and self.power_priority_load_MW < 0:
             raise ValueError(f"{self.name}: power_priority_load_MW must be non-negative.")
+        if self.variable_opex_USD_per_MWh < 0:
+            raise ValueError(f"{self.name}: variable_opex_USD_per_MWh must be non-negative.")

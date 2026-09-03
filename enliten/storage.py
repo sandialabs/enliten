@@ -67,9 +67,11 @@ class Storage:
     minimum_state_of_charge_MWh: float = 0.0
     percent_loss_daily: float = 0.0
     start_full: bool = False
+    initial_energy_MWh: float | None = None
     off_grid_operation: bool = True
     capex: float | None = None
     opex: float | None = None
+    variable_opex_USD_per_MWh: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -92,6 +94,10 @@ class Storage:
             )
         if self.percent_loss_daily < 0:
             raise ValueError(f"{self.name}: percent_loss_daily must be non-negative.")
+        if self.initial_energy_MWh is not None and not 0 <= self.initial_energy_MWh <= self.capacity_MWh:
+            raise ValueError(f"{self.name}: initial_energy_MWh must be within capacity_MWh.")
+        if self.variable_opex_USD_per_MWh < 0:
+            raise ValueError(f"{self.name}: variable_opex_USD_per_MWh must be non-negative.")
 
     def discharge_efficiency_at(self, hour: int) -> float:
         efficiency = self.discharge_efficiency
