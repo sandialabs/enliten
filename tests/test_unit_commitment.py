@@ -2,14 +2,11 @@ import pandas as pd
 import pytest
 
 from enliten import ChargingPath, Generation, LCOECalculator, Site, Storage, System
-from examples.common import (
-    DEFAULT_PV_CAPACITY_MULTIPLIER,
+from tests.fixtures import (
     fixture_csp_multiple_storage_system,
     fixture_csp_tes_system,
     fixture_pv_bes_system,
     fixture_pv_csp_bes_tes_system,
-    pnm_profiles,
-    pv_bes_system,
 )
 
 
@@ -75,7 +72,7 @@ def test_reserve_is_an_explicit_storage_characteristic():
 
 def test_normal_metrics_provide_tea_ready_annual_inputs():
     system = fixture_pv_bes_system(hours=16)
-    metrics = system.tea_metrics()
+    metrics = system.operation_metrics()
 
     assert metrics["operating_hours"] == 15
     assert metrics["unmet_load_MWh_electric"] == pytest.approx(0)
@@ -127,18 +124,6 @@ def test_plot_functions_return_figures_without_displaying_them():
     for figure, axis in figures:
         assert figure.axes == [axis]
         plt.close(figure)
-
-
-def test_public_example_builders_use_aligned_pnm_profiles():
-    demand, pv, csp = pnm_profiles(hours=48)
-    system = pv_bes_system(hours=48)
-
-    assert demand.index.equals(pv.index)
-    assert demand.index.equals(csp.index)
-    assert system.load_MW.equals(demand)
-    assert system.timeseries["pv_available_MW_electric"].equals(pv * DEFAULT_PV_CAPACITY_MULTIPLIER)
-    assert system.metrics["system_capex_USD"] > 0
-    assert system.metrics["system_annual_OM_USD"] > 0
 
 
 def test_original_tea_calculator_adapts_generic_system_metrics():

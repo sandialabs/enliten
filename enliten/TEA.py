@@ -2,7 +2,7 @@
 
 The public ``LCOECalculator`` API and core cash-flow calculation are retained.
 This version additionally accepts the annual lists emitted by the generic
-``System.tea_metrics()`` method and provides :meth:`from_system` as the
+``System.operation_metrics()`` method and provides :meth:`from_system` as the
 preferred integration point.
 """
 
@@ -80,7 +80,7 @@ class LCOECalculator:
         """
         if system.load_energy_type != "electric":
             raise ValueError("LCOECalculator.from_system requires an electric load-energy system.")
-        metrics = system.tea_metrics()
+        metrics = system.operation_metrics()
         return cls(
             system_capex_USD=metrics["system_capex_USD"],
             system_annual_OM_USD=metrics["system_annual_OM_USD"],

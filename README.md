@@ -30,17 +30,17 @@ Open the notebooks in `examples/`:
 - `csp_multiple_storage.ipynb` — one CSP asset charging thermal and electric
   stores at distinct conversion efficiencies and rates.
 
-The public notebook builders in `examples/common.py` use the supplied PNM data
-profiles; replace them with application-specific resource and load data for a
-production study.
+Each public notebook is self-contained: it loads the supplied PNM data,
+declares assets and charging paths, and then runs its own dispatch. Replace
+those profile and asset-declaration cells with application-specific inputs for
+a production study.
 
 The included notebooks currently use the aligned 2023 PNM profiles in
 `examples/data/`: `PNM_demand.csv`, `PNM_pv_ac_1MW_av.csv`, and
-`PNM_csp_th_av.csv`. `examples.common.pnm_profiles()` validates their common
-UTC hourly index and returns the values in the units supplied. The public
-system builders accept `hours` and `start` to select a study period, along
-with explicit demand/PV/CSP multipliers. Their illustrative microgrid defaults
-are 5% of the PNM demand, 2,000× PV availability, unscaled CSP thermal
+`PNM_csp_th_av.csv`. Each notebook validates the common UTC hourly index and
+uses the values in the units supplied. Its setup cell selects a study period
+and declares explicit demand/PV/CSP multipliers. The illustrative microgrid defaults
+are 5% of the PNM demand, 3,000× PV availability, unscaled CSP thermal
 availability, a 750 MWh / 150 MW BES, and a 2,500 MWh-thermal / 150 MW-electric
 TES. These were deliberately chosen to show both grid-free and
 grid-dependent hours in January/July sample windows; they are not a PNM
@@ -59,7 +59,7 @@ calculator = LCOECalculator.from_system(system, analysis_period=30)
 tea_results = calculator.calculate_lcoe_metrics()
 ```
 
-`from_system` maps `System.tea_metrics()` into the original calculator's
+`from_system` maps `System.operation_metrics()` into the original calculator's
 capital cost, fixed/variable O&M, annual electric energy, augmentation,
 electricity-sale, and grid-purchase inputs. Assign each asset's `capex`,
 `opex`, and `variable_opex_USD_per_MWh` when creating the system; the public
@@ -134,8 +134,8 @@ from the legacy bug-compatible result.
 
 ## Metrics, resilience, and plotting
 
-`System.timeseries` is the auditable hourly ledger. `System.system_metrics()`
-(or its `tea_metrics()` alias) calculates the normal-operation totals and
+`System.timeseries` is the auditable hourly ledger.
+`System.operation_metrics()` calculates normal-operation totals and
 annualized TEA inputs directly from that ledger: system/load/grid/export MWh,
 capex, fixed O&M, variable O&M, electricity-sale revenue, grid-purchase cost,
 and `system_augment`. Annual values are scaled from non-calendar fixture data

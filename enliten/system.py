@@ -65,7 +65,7 @@ class System:
             raise TypeError(f"System assets must be Generation or Storage; received {unknown}.")
         self._validate_assets()
         self.timeseries = self.operation()
-        self.metrics = self.system_metrics()
+        self.metrics = self.operation_metrics()
 
     @staticmethod
     def _load_series(load_MW: pd.Series | pd.DataFrame) -> pd.Series:
@@ -359,8 +359,12 @@ class System:
         metrics["system_augment"] = metrics["system_augment_USD"]
         return metrics
 
-    def tea_metrics(self) -> dict[str, object]:
-        """Return the normal-operation fields commonly consumed by a TEA model."""
+    def operation_metrics(self) -> dict[str, object]:
+        """Return metrics derived from the normal-operation time series.
+
+        The result includes energy balances, reliability, costs, annualized
+        values, and all fields needed by a TEA model; it is not TEA-specific.
+        """
         return self.system_metrics()
 
     def _wrapped_positions(self, start_hour: int, length: int) -> list[int]:
