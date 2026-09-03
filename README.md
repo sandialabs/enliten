@@ -30,8 +30,46 @@ Open the notebooks in `examples/`:
 - `csp_multiple_storage.ipynb` — one CSP asset charging thermal and electric
   stores at distinct conversion efficiencies and rates.
 
-They use short deterministic fixtures from `examples/common.py`; replace those
-with production resource and load time series for an application study.
+The public notebook builders in `examples/common.py` use the supplied PNM data
+profiles; replace them with application-specific resource and load data for a
+production study.
+
+The included notebooks currently use the aligned 2023 PNM profiles in
+`examples/data/`: `PNM_demand.csv`, `PNM_pv_ac_1MW_av.csv`, and
+`PNM_csp_th_av.csv`. `examples.common.pnm_profiles()` validates their common
+UTC hourly index and returns the values in the units supplied. The public
+system builders accept `hours` and `start` to select a study period, along
+with explicit demand/PV/CSP multipliers. Their illustrative microgrid defaults
+are 5% of the PNM demand, 2,000× PV availability, unscaled CSP thermal
+availability, a 750 MWh / 150 MW BES, and a 2,500 MWh-thermal / 150 MW-electric
+TES. These were deliberately chosen to show both grid-free and
+grid-dependent hours in January/July sample windows; they are not a PNM
+planning recommendation. Override the named arguments for a study-specific
+sizing.
+
+## TEA
+
+The original `enliten.TEA.LCOECalculator` has been restored and now accepts the
+generic system format directly:
+
+```python
+from enliten import LCOECalculator
+
+calculator = LCOECalculator.from_system(system, analysis_period=30)
+tea_results = calculator.calculate_lcoe_metrics()
+```
+
+`from_system` maps `System.tea_metrics()` into the original calculator's
+capital cost, fixed/variable O&M, annual electric energy, augmentation,
+electricity-sale, and grid-purchase inputs. Assign each asset's `capex`,
+`opex`, and `variable_opex_USD_per_MWh` when creating the system; the public
+operational examples include illustrative 2022-real-dollar defaults: PV uses
+$1,430/kW-AC capex and $24/kW-AC-year fixed O&M; BES uses $300/kWh capex and
+2.5% fixed O&M; and the integrated CSP+TES plant uses $7,912/kW-electric
+capex, $74.6/kW-electric-year fixed O&M, and $3.80/MWh-electric variable O&M.
+The CSP+TES capital and fixed O&M are assigned to CSP so the generic TES asset
+does not double-count costs; its variable O&M is applied to electric delivery.
+See `docs/Examples/example_TEA.ipynb` for the full dispatch-to-TEA workflow.
 
 ## Model
 

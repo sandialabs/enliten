@@ -1,12 +1,15 @@
 import pandas as pd
 import pytest
 
-from enliten import ChargingPath, Generation, Site, Storage, System
+from enliten import ChargingPath, Generation, LCOECalculator, Site, Storage, System
 from examples.common import (
-    csp_multiple_storage_system,
-    csp_tes_system,
+    DEFAULT_PV_CAPACITY_MULTIPLIER,
+    fixture_csp_multiple_storage_system,
+    fixture_csp_tes_system,
+    fixture_pv_bes_system,
+    fixture_pv_csp_bes_tes_system,
+    pnm_profiles,
     pv_bes_system,
-    pv_csp_bes_tes_system,
 )
 
 
@@ -15,7 +18,7 @@ def assert_values(frame, column, expected):
 
 
 def test_pv_bes_matches_legacy_dispatch_signature_with_typed_flows():
-    df = pv_bes_system(hours=16).timeseries
+    df = fixture_pv_bes_system(hours=16).timeseries
     assert_values(df, "pv_to_load_MWh_electric", [0, 6, 7, 0, 0])
     assert_values(df, "pv_to_bes_MWh_electric", [0, 2, 3, 0, 0])
     assert_values(df, "pv_to_bes_stored_MWh_electric", [0, 1.8, 2.7, 0, 0])
@@ -24,7 +27,7 @@ def test_pv_bes_matches_legacy_dispatch_signature_with_typed_flows():
 
 
 def test_csp_tes_tracks_thermal_input_and_storage_separately_from_electric_load():
-    df = csp_tes_system(hours=16).timeseries
+    df = fixture_csp_tes_system(hours=16).timeseries
     assert_values(df, "csp_to_tes_MWh_thermal", [0, 8, 0, 4, 6])
     assert_values(df, "csp_to_tes_stored_MWh_thermal", [0, 7.2, 0, 3.6, 5.4])
     assert_values(df, "tes_to_load_MWh_electric", [0, 3.6, 0, 1.8, 2.7])
@@ -32,7 +35,7 @@ def test_csp_tes_tracks_thermal_input_and_storage_separately_from_electric_load(
 
 
 def test_pv_csp_bes_tes_matches_legacy_dispatch_signature_with_typed_ledgers():
-    df = pv_csp_bes_tes_system(hours=16).timeseries
+    df = fixture_pv_csp_bes_tes_system(hours=16).timeseries
     assert_values(df, "csp_to_tes_MWh_thermal", [0, 8, 0, 4, 6])
     assert_values(df, "pv_to_load_MWh_electric", [0, 6, 7, 0, 0])
     assert_values(df, "tes_to_load_MWh_electric", [0, 0, 0, 4, 4.1])
@@ -41,7 +44,7 @@ def test_pv_csp_bes_tes_matches_legacy_dispatch_signature_with_typed_ledgers():
 
 
 def test_one_generation_asset_charges_multiple_storage_types_via_typed_paths():
-    df = csp_multiple_storage_system().timeseries
+    df = fixture_csp_multiple_storage_system().timeseries
     assert df.loc[1, "csp_to_tes_MWh_thermal"] == pytest.approx(6.0)
     assert df.loc[1, "csp_to_tes_stored_MWh_thermal"] == pytest.approx(5.4)
     assert df.loc[1, "csp_to_bes_MWh_thermal"] == pytest.approx(4.0)
@@ -71,7 +74,7 @@ def test_reserve_is_an_explicit_storage_characteristic():
 
 
 def test_normal_metrics_provide_tea_ready_annual_inputs():
-    system = pv_bes_system(hours=16)
+    system = fixture_pv_bes_system(hours=16)
     metrics = system.tea_metrics()
 
     assert metrics["operating_hours"] == 15
@@ -84,7 +87,7 @@ def test_normal_metrics_provide_tea_ready_annual_inputs():
 
 
 def test_resilience_supports_seeded_user_defined_random_starts_and_metrics():
-    system = pv_bes_system(hours=16)
+    system = fixture_pv_bes_system(hours=16)
     cases = system.resilience_cases(
         critical_load_MW=2.0, target_hours=4, n_starts=5, seed=42
     )
@@ -115,7 +118,7 @@ def test_plot_functions_return_figures_without_displaying_them():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    system = pv_bes_system(hours=32)
+    system = fixture_pv_bes_system(hours=32)
     figures = [
         system.timeseries_plot_source(start_date=0, days=1),
         system.timeseries_plot_group(start_date=0, days=1),
@@ -124,3 +127,34 @@ def test_plot_functions_return_figures_without_displaying_them():
     for figure, axis in figures:
         assert figure.axes == [axis]
         plt.close(figure)
+
+
+def test_public_example_builders_use_aligned_pnm_profiles():
+    demand, pv, csp = pnm_profiles(hours=48)
+    system = pv_bes_system(hours=48)
+
+    assert demand.index.equals(pv.index)
+    assert demand.index.equals(csp.index)
+    assert system.load_MW.equals(demand)
+    assert system.timeseries["pv_available_MW_electric"].equals(pv * DEFAULT_PV_CAPACITY_MULTIPLIER)
+    assert system.metrics["system_capex_USD"] > 0
+    assert system.metrics["system_annual_OM_USD"] > 0
+
+
+def test_original_tea_calculator_adapts_generic_system_metrics():
+    site = Site("site")
+    generator = Generation(
+        "generator", site, [0.0, 5.0, 5.0], "electric",
+        capex=100_000.0, opex=2_000.0, variable_opex_USD_per_MWh=1.0,
+    )
+    system = System(
+        pd.Series([5.0, 5.0, 5.0], name="load_MW"), [generator],
+        grid_energy_cost_USD_per_kWh=0.10,
+    )
+
+    calculator = LCOECalculator.from_system(system, analysis_period=20)
+    tea = calculator.calculate_lcoe_metrics()
+
+    assert calculator.system_to_load_annual_MWh_e == system.metrics["system_to_load_annual_MWh_electric"]
+    assert tea["LCOE_real_USD_kWh_AT"] > 0
+    assert tea["LCOE_real_USD_kWh_BT"] > 0

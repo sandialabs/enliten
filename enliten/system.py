@@ -536,7 +536,7 @@ class System:
                 df[columns].plot.area(stacked=True, ax=ax, lw=0, color=color_seq)
             else:
                 raise ValueError("type must be 'area' or 'bar'.")
-        ax.plot(df.index, df["load_MW"], color="black", label="load")
+        df["load_MW"].plot(ax=ax, color="black", label="load")
         ax.set_ylabel(f"Hourly Energy (MWh_{self.load_energy_type})")
         ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
         return fig, ax
@@ -554,7 +554,7 @@ class System:
         grouped = grouped.loc[:, grouped.any()]
         fig, ax = plt.subplots()
         grouped.plot.area(stacked=True, ax=ax, lw=0)
-        ax.plot(df.index, df["load_MW"], color="black", label="load")
+        df["load_MW"].plot(ax=ax, color="black", label="load")
         ax.set_ylabel(f"Hourly Energy (MWh_{self.load_energy_type})")
         ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
         return fig, ax
