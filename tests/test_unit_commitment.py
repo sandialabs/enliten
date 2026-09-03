@@ -1,52 +1,70 @@
 import pandas as pd
 import pytest
 
-from enliten import Generation, Site, Storage, System
-from examples.common import csp_tes_system, pv_bes_system, pv_csp_bes_tes_system
+from enliten import ChargingPath, Generation, Site, Storage, System
+from examples.common import (
+    csp_multiple_storage_system,
+    csp_tes_system,
+    pv_bes_system,
+    pv_csp_bes_tes_system,
+)
 
 
 def assert_values(frame, column, expected):
     assert frame[column].iloc[: len(expected)].tolist() == pytest.approx(expected)
 
 
-def test_pv_bes_matches_legacy_dispatch_signature():
-    """Signature recorded from the supplied legacy package's effective logic."""
+def test_pv_bes_matches_legacy_dispatch_signature_with_typed_flows():
     df = pv_bes_system(hours=16).timeseries
-    assert_values(df, "pv_to_load_MWh", [0, 6, 7, 0, 0])
-    assert_values(df, "pv_to_bes_MWh", [0, 2, 3, 0, 0])
-    assert_values(df, "bes_MWh", [0, 1.8, 4.5, 1 / 18, 0])
-    assert_values(df, "bes_to_load_MWh", [0, 0, 0, 4, 0.05])
+    assert_values(df, "pv_to_load_MWh_electric", [0, 6, 7, 0, 0])
+    assert_values(df, "pv_to_bes_MWh_electric", [0, 2, 3, 0, 0])
+    assert_values(df, "pv_to_bes_stored_MWh_electric", [0, 1.8, 2.7, 0, 0])
+    assert_values(df, "bes_MWh_electric", [0, 1.8, 4.5, 1 / 18, 0])
+    assert_values(df, "bes_to_load_MWh_electric", [0, 0, 0, 4, 0.05])
 
 
-def test_csp_tes_matches_legacy_dispatch_signature():
+def test_csp_tes_tracks_thermal_input_and_storage_separately_from_electric_load():
     df = csp_tes_system(hours=16).timeseries
-    assert_values(df, "csp_to_tes_MWh", [0, 8, 0, 4, 6])
-    assert_values(df, "tes_to_load_MWh", [0, 3.6, 0, 1.8, 2.7])
-    assert_values(df, "grid_to_load_MWh", [0, 2.4, 7, 2.2, 2.3])
+    assert_values(df, "csp_to_tes_MWh_thermal", [0, 8, 0, 4, 6])
+    assert_values(df, "csp_to_tes_stored_MWh_thermal", [0, 7.2, 0, 3.6, 5.4])
+    assert_values(df, "tes_to_load_MWh_electric", [0, 3.6, 0, 1.8, 2.7])
+    assert_values(df, "grid_to_load_MWh_electric", [0, 2.4, 7, 2.2, 2.3])
 
 
-def test_pv_csp_bes_tes_matches_legacy_dispatch_signature():
-    """The combined-case rows match the supplied legacy System.operation."""
+def test_pv_csp_bes_tes_matches_legacy_dispatch_signature_with_typed_ledgers():
     df = pv_csp_bes_tes_system(hours=16).timeseries
-    assert_values(df, "csp_to_tes_MWh", [0, 8, 0, 4, 6])
-    assert_values(df, "pv_to_load_MWh", [0, 6, 7, 0, 0])
-    assert_values(df, "tes_to_load_MWh", [0, 0, 0, 4, 4.1])
-    assert_values(df, "bes_to_load_MWh", [0, 0, 0, 0, 0.9])
-    assert_values(df, "grid_to_load_MWh", [0, 0, 0, 0, 0])
+    assert_values(df, "csp_to_tes_MWh_thermal", [0, 8, 0, 4, 6])
+    assert_values(df, "pv_to_load_MWh_electric", [0, 6, 7, 0, 0])
+    assert_values(df, "tes_to_load_MWh_electric", [0, 0, 0, 4, 4.1])
+    assert_values(df, "bes_to_load_MWh_electric", [0, 0, 0, 0, 0.9])
+    assert_values(df, "grid_to_load_MWh_electric", [0, 0, 0, 0, 0])
+
+
+def test_one_generation_asset_charges_multiple_storage_types_via_typed_paths():
+    df = csp_multiple_storage_system().timeseries
+    assert df.loc[1, "csp_to_tes_MWh_thermal"] == pytest.approx(6.0)
+    assert df.loc[1, "csp_to_tes_stored_MWh_thermal"] == pytest.approx(5.4)
+    assert df.loc[1, "csp_to_bes_MWh_thermal"] == pytest.approx(4.0)
+    assert df.loc[1, "csp_to_bes_stored_MWh_electric"] == pytest.approx(1.6)
+    assert df.loc[1, "tes_MWh_thermal"] == pytest.approx(5.4)
+    assert df.loc[1, "bes_MWh_electric"] == pytest.approx(1.6)
+
+
+def test_energy_types_are_validated_at_each_connection():
+    site = Site("site")
+    csp = Generation("csp", site, [0.0, 1.0], output_energy_type="thermal", can_supply_load=False)
+    battery = Storage("battery", site, 1.0, 1.0, stored_energy_type="electric")
+    wrong_path = ChargingPath("csp", "battery", "electric", "electric", 0.9)
+    with pytest.raises(ValueError, match="source_energy_type"):
+        System(pd.Series([0.0, 0.0]), [csp, battery], [wrong_path])
 
 
 def test_reserve_is_an_explicit_storage_characteristic():
     site = Site("site")
     storage = Storage(
-        "storage",
-        site,
-        capacity_MWh=10,
-        power_rating_MW=10,
-        systems_charging=[],
-        discharge_efficiency=1,
-        minimum_state_of_charge_MWh=2,
-        start_full=True,
+        "storage", site, capacity_MWh=10, power_rating_MW=10,
+        minimum_state_of_charge_MWh=2, start_full=True,
     )
     result = System(pd.Series([10.0, 10.0], name="load_MW"), [storage]).timeseries
-    assert result.loc[1, "storage_to_load_MWh"] == pytest.approx(8)
-    assert result.loc[1, "storage_MWh"] == pytest.approx(2)
+    assert result.loc[1, "storage_to_load_MWh_electric"] == pytest.approx(8)
+    assert result.loc[1, "storage_MWh_electric"] == pytest.approx(2)

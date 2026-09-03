@@ -25,6 +25,7 @@ packages or Sandia-specific files.
 python examples/pv_bes.py
 python examples/csp_tes.py
 python examples/pv_csp_bes_tes.py
+python examples/csp_multiple_storage.py
 ```
 
 Each example prints an energy-flow summary and the first six hours of its
@@ -35,35 +36,49 @@ an application study.
 ## Model
 
 ```python
-from enliten import Generation, Site, Storage, System
+from enliten import ChargingPath, Generation, Site, Storage, System
 
 site = Site("plant")
-pv = Generation("pv", site, pv_mw, can_supply_load=True)
+pv = Generation("pv", site, pv_mw, output_energy_type="electric")
 battery = Storage(
     "battery", site,
     capacity_MWh=30,
     power_rating_MW=10,
-    systems_charging=["pv"],
-    charge_efficiency={"pv": 0.92},
+    stored_energy_type="electric",
+    load_output_energy_type="electric",
     discharge_efficiency=0.92,
-    charge_rate_MW=10,
 )
-result = System(load_mw, [battery, pv]).timeseries
+pv_to_battery = ChargingPath(
+    "pv", "battery",
+    source_energy_type="electric",
+    stored_energy_type="electric",
+    input_to_stored_efficiency=0.92,
+    maximum_input_rate_MW=10,
+)
+result = System(load_mw, [battery, pv], [pv_to_battery]).timeseries
 ```
 
-Generation attributes describe an available power time series, whether it can
-directly serve electric load, and its connection site. Storage attributes
-describe capacity, charge/discharge limits, efficiencies, loss, starting
-state, reserve, and the *names* of allowable charging sources. A thermal store
-is the same `Storage` class as a battery; provide its thermal-to-electric
-conversion efficiency (constant or hourly sequence) as
-`discharge_efficiency`.
+Generation declares the energy type of its available power time series.
+Storage declares its stored-energy and load-output types; a thermal store is
+therefore the same `Storage` class as a battery, with a thermal state of charge
+and a thermal-to-electric `discharge_efficiency` (constant or hourly).
+`ChargingPath` declares each permitted generation-to-storage connection, its
+source and stored-energy types, input-to-stored efficiency, and maximum input
+rate in the **source** energy unit.
+
+For example, CSP->TES uses a thermal input rate and creates thermal stored
+energy; PV->BES uses electric units throughout; CSP->BES can use a thermal
+input, electric stored energy, and an explicit thermal-to-electric conversion
+efficiency. The DataFrame records both sides, such as
+`csp_to_bes_MWh_thermal` and `csp_to_bes_stored_MWh_electric`, so energy types
+are never silently mixed.
 
 Asset order is deliberate policy. Non-load-serving generators charge their
 compatible storage first. Load-serving generators serve load and then charge
-storage. Storage assets serve residual load in the order in which they are
-passed to `System`. This permits the old CSP->TES, PV->load/charge,
-TES->load, BES->load priority without technology-specific conditionals.
+storage. `ChargingPath.priority` selects among a generator's charging routes;
+storage assets serve residual load in the order in which they are passed to
+`System`. This permits the old CSP->TES, PV->load/charge, TES->load,
+BES->load priority without technology-specific conditionals.
 
 ## Storage reserve and the legacy BES line
 

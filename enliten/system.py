@@ -1,14 +1,15 @@
-"""Technology-agnostic hourly unit commitment for generation and storage."""
+"""Technology-agnostic hourly unit commitment with explicit energy pathways."""
 
 from __future__ import annotations
 
 from itertools import cycle, islice
-from typing import Iterable
+import re
+from typing import Iterable, Sequence
 
 import pandas as pd
 
-from .generation import Generation
-from .storage import Storage
+from .generation import Generation, validate_energy_type
+from .storage import ChargingPath, Storage
 
 
 def _site_name(asset: object) -> str:
@@ -20,21 +21,32 @@ def _poi_limit(asset: object) -> float | None:
     return getattr(getattr(asset, "site"), "POI_limit", None)
 
 
-class System:
-    """Dispatch generation and storage without technology-specific branches.
+def _token(energy_type: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", energy_type.lower()).strip("_")
 
-    Asset order is meaningful: non-load-serving generators first charge
-    compatible storage, load-serving generators then serve load and charge
-    storage, and storage is discharged in supplied order. This reproduces the
-    legacy CSP->TES, PV->load/charge, BES->load, TES->load priority without
-    checking for PV, CSP, BES, or TES classes.
+
+class System:
+    """Dispatch typed energy flows without checking technology names.
+
+    A :class:`ChargingPath` is the sole way to convert energy while charging.
+    Its source and stored-energy labels must match the connected generator and
+    storage. Asset order sets storage-discharge priority; ``ChargingPath``
+    priority sets charging priority for one generation asset.
     """
 
-    def __init__(self, load_MW: pd.Series | pd.DataFrame, systems_load_order: Iterable[object]):
+    def __init__(
+        self,
+        load_MW: pd.Series | pd.DataFrame,
+        systems_load_order: Iterable[object],
+        charging_paths: Sequence[ChargingPath] = (),
+        load_energy_type: str = "electric",
+    ):
         self.load_MW = self._load_series(load_MW)
+        self.load_energy_type = validate_energy_type(load_energy_type, "load_energy_type")
         self.systems = list(systems_load_order)
         self.generators = [asset for asset in self.systems if isinstance(asset, Generation)]
         self.storage_systems = [asset for asset in self.systems if isinstance(asset, Storage)]
+        self.charging_paths = list(charging_paths)
         if len(self.generators) + len(self.storage_systems) != len(self.systems):
             unknown = [
                 type(asset).__name__
@@ -63,12 +75,48 @@ class System:
         names = [asset.name for asset in self.systems]
         if len(names) != len(set(names)):
             raise ValueError("Every generation and storage asset must have a unique name.")
-        generator_names = {generator.name for generator in self.generators}
-        for storage in self.storage_systems:
-            missing = set(storage.systems_charging) - generator_names
-            if missing:
+        self._generators_by_name = {generator.name: generator for generator in self.generators}
+        self._storage_by_name = {storage.name: storage for storage in self.storage_systems}
+        self._paths_by_generation: dict[str, list[ChargingPath]] = {
+            generator.name: [] for generator in self.generators
+        }
+        seen_connections: set[tuple[str, str]] = set()
+        for path in self.charging_paths:
+            if path.generation_name not in self._generators_by_name:
+                raise ValueError(f"ChargingPath source is not in this system: {path.generation_name!r}")
+            if path.storage_name not in self._storage_by_name:
+                raise ValueError(f"ChargingPath storage is not in this system: {path.storage_name!r}")
+            connection = (path.generation_name, path.storage_name)
+            if connection in seen_connections:
+                raise ValueError(f"Duplicate ChargingPath for {path.generation_name} -> {path.storage_name}.")
+            seen_connections.add(connection)
+            generator = self._generators_by_name[path.generation_name]
+            storage = self._storage_by_name[path.storage_name]
+            if path.source_energy_type != generator.output_energy_type:
                 raise ValueError(
-                    f"{storage.name}: charging sources are not in this system: {sorted(missing)}"
+                    f"{path.generation_name} -> {path.storage_name}: source_energy_type "
+                    f"({path.source_energy_type}) must match generation output "
+                    f"({generator.output_energy_type})."
+                )
+            if path.stored_energy_type != storage.stored_energy_type:
+                raise ValueError(
+                    f"{path.generation_name} -> {path.storage_name}: stored_energy_type "
+                    f"({path.stored_energy_type}) must match storage type "
+                    f"({storage.stored_energy_type})."
+                )
+            self._paths_by_generation[path.generation_name].append(path)
+        for paths in self._paths_by_generation.values():
+            paths.sort(key=lambda path: path.priority)
+        for generator in self.generators:
+            if generator.can_supply_load and generator.output_energy_type != self.load_energy_type:
+                raise ValueError(
+                    f"{generator.name}: {generator.output_energy_type} generation cannot directly serve "
+                    f"{self.load_energy_type} load. Set can_supply_load=False or model a conversion path."
+                )
+            if generator.can_export and generator.output_energy_type != self.load_energy_type:
+                raise ValueError(
+                    f"{generator.name}: only {self.load_energy_type} generation can export through this "
+                    "system's load/grid connection. Set can_export=False."
                 )
 
     @staticmethod
@@ -77,27 +125,36 @@ class System:
         return values[:length] if len(values) >= length else list(islice(cycle(values), length))
 
     def _initial_frame(self) -> pd.DataFrame:
+        load_type = _token(self.load_energy_type)
         df = pd.DataFrame({"load_MW": self.load_MW})
-        df["grid_to_load_MWh"] = 0.0
-        df["unmet_load_MWh"] = 0.0
-        df["export_energy_MWh"] = 0.0
+        df[f"grid_to_load_MWh_{load_type}"] = 0.0
+        df[f"unmet_load_MWh_{load_type}"] = 0.0
+        df[f"export_energy_MWh_{load_type}"] = 0.0
         for generator in self.generators:
-            df[f"{generator.name}_available_MW"] = self._matched_timeseries(
+            source_type = _token(generator.output_energy_type)
+            df[f"{generator.name}_available_MW_{source_type}"] = self._matched_timeseries(
                 generator.power_timeseries, len(df)
             )
-            df[f"{generator.name}_to_load_MWh"] = 0.0
-            df[f"{generator.name}_to_grid_MWh"] = 0.0
-            df[f"{generator.name}_curtailed_MWh"] = 0.0
-            for storage in self.storage_systems:
-                if generator.name in storage.systems_charging:
-                    df[f"{generator.name}_to_{storage.name}_MWh"] = 0.0
+            df[f"{generator.name}_to_load_MWh_{load_type}"] = 0.0
+            df[f"{generator.name}_to_grid_MWh_{load_type}"] = 0.0
+            df[f"{generator.name}_curtailed_MWh_{source_type}"] = 0.0
+        for path in self.charging_paths:
+            source_type = _token(path.source_energy_type)
+            stored_type = _token(path.stored_energy_type)
+            base = f"{path.generation_name}_to_{path.storage_name}"
+            df[f"{base}_MWh_{source_type}"] = 0.0
+            df[f"{base}_stored_MWh_{stored_type}"] = 0.0
         for storage in self.storage_systems:
-            df[f"{storage.name}_MWh"] = float(storage.capacity_MWh) if storage.start_full else 0.0
-            df[f"{storage.name}_to_load_MWh"] = 0.0
-            df[f"{storage.name}_loss_MWh"] = 0.0
+            stored_type = _token(storage.stored_energy_type)
+            output_type = _token(storage.load_output_energy_type)
+            df[f"{storage.name}_MWh_{stored_type}"] = (
+                float(storage.capacity_MWh) if storage.start_full else 0.0
+            )
+            df[f"{storage.name}_to_load_MWh_{output_type}"] = 0.0
+            df[f"{storage.name}_loss_MWh_{stored_type}"] = 0.0
         sites = {_site_name(asset): asset.site for asset in self.systems}
         for site in sites.values():
-            df[f"{site.name}_POI_MW"] = 0.0
+            df[f"{site.name}_POI_MW_{load_type}"] = 0.0
         return df
 
     @staticmethod
@@ -106,59 +163,68 @@ class System:
         return float("inf") if limit is None else max(0.0, limit - site_dispatch[_site_name(asset)])
 
     def operation(self) -> pd.DataFrame:
-        """Run a one-hour-step dispatch and return auditable named energy flows."""
+        """Run one-hour dispatch while retaining source, stored, and load types."""
         df = self._initial_frame()
+        load_type = _token(self.load_energy_type)
         states = {
-            storage.name: float(df.iloc[0][f"{storage.name}_MWh"])
+            storage.name: float(df.iloc[0][f"{storage.name}_MWh_{_token(storage.stored_energy_type)}"])
             for storage in self.storage_systems
         }
 
-        # Row zero records initial state, matching the legacy package's time
-        # convention. Dispatch begins at the second timestamp.
+        # Row zero records initial state, matching the legacy package's time convention.
         for position in range(1, len(df)):
             index = df.index[position]
             site_dispatch = {_site_name(asset): 0.0 for asset in self.systems}
             available = {
-                generator.name: max(0.0, float(df.loc[index, f"{generator.name}_available_MW"]))
+                generator.name: max(
+                    0.0,
+                    float(df.loc[index, f"{generator.name}_available_MW_{_token(generator.output_energy_type)}"]),
+                )
                 for generator in self.generators
             }
-            charge_remaining = {
-                storage.name: (
-                    storage.charge_rate_MW
-                    if storage.charge_rate_MW is not None
-                    else float("inf")
-                )
-                for storage in self.storage_systems
-            }
+            stored_charge_used = {storage.name: 0.0 for storage in self.storage_systems}
 
             for storage in self.storage_systems:
+                stored_type = _token(storage.stored_energy_type)
                 loss = states[storage.name] * storage.percent_loss_daily / 2400.0
                 states[storage.name] = max(0.0, states[storage.name] - loss)
-                df.loc[index, f"{storage.name}_loss_MWh"] = loss
+                df.loc[index, f"{storage.name}_loss_MWh_{stored_type}"] = loss
 
             unmet = float(df.loc[index, "load_MW"])
 
             def charge(generator: Generation) -> None:
-                for storage in self.storage_systems:
-                    if generator.name not in storage.systems_charging or available[generator.name] <= 0:
-                        continue
-                    efficiency = storage.charge_efficiency_for(generator.name)
+                for path in self._paths_by_generation[generator.name]:
+                    if available[generator.name] <= 0:
+                        break
+                    storage = self._storage_by_name[path.storage_name]
                     headroom = max(0.0, storage.capacity_MWh - states[storage.name])
-                    amount = max(
+                    stored_rate_remaining = (
+                        float("inf")
+                        if storage.maximum_stored_energy_rate_MW is None
+                        else max(0.0, storage.maximum_stored_energy_rate_MW - stored_charge_used[storage.name])
+                    )
+                    input_rate = (
+                        float("inf")
+                        if path.maximum_input_rate_MW is None
+                        else path.maximum_input_rate_MW
+                    )
+                    input_energy = max(
                         0.0,
                         min(
                             available[generator.name],
-                            charge_remaining[storage.name],
-                            headroom / efficiency,
+                            input_rate,
+                            headroom / path.input_to_stored_efficiency,
+                            stored_rate_remaining / path.input_to_stored_efficiency,
                         ),
                     )
-                    available[generator.name] -= amount
-                    states[storage.name] += amount * efficiency
-                    charge_remaining[storage.name] -= amount
-                    df.loc[index, f"{generator.name}_to_{storage.name}_MWh"] += amount
+                    stored_energy = input_energy * path.input_to_stored_efficiency
+                    available[generator.name] -= input_energy
+                    states[storage.name] += stored_energy
+                    stored_charge_used[storage.name] += stored_energy
+                    base = f"{path.generation_name}_to_{path.storage_name}"
+                    df.loc[index, f"{base}_MWh_{_token(path.source_energy_type)}"] += input_energy
+                    df.loc[index, f"{base}_stored_MWh_{_token(path.stored_energy_type)}"] += stored_energy
 
-            # Non-load-serving generation (e.g. thermal CSP) charges storage
-            # first. No technology name appears in this decision.
             for generator in self.generators:
                 if not generator.can_supply_load:
                     charge(generator)
@@ -171,7 +237,7 @@ class System:
                     if generator.power_priority_load_MW is None
                     else generator.power_priority_load_MW
                 )
-                amount = max(
+                delivered = max(
                     0.0,
                     min(
                         available[generator.name],
@@ -180,13 +246,15 @@ class System:
                         direct_limit,
                     ),
                 )
-                available[generator.name] -= amount
-                unmet -= amount
-                site_dispatch[_site_name(generator)] += amount
-                df.loc[index, f"{generator.name}_to_load_MWh"] = amount
+                available[generator.name] -= delivered
+                unmet -= delivered
+                site_dispatch[_site_name(generator)] += delivered
+                df.loc[index, f"{generator.name}_to_load_MWh_{load_type}"] = delivered
                 charge(generator)
 
             for storage in self.storage_systems:
+                if storage.load_output_energy_type != self.load_energy_type:
+                    continue
                 efficiency = storage.discharge_efficiency_at(position - 1)
                 available_energy = max(
                     0.0, states[storage.name] - storage.minimum_state_of_charge_MWh
@@ -203,11 +271,12 @@ class System:
                 states[storage.name] -= delivered / efficiency
                 unmet -= delivered
                 site_dispatch[_site_name(storage)] += delivered
-                df.loc[index, f"{storage.name}_to_load_MWh"] = delivered
+                df.loc[index, f"{storage.name}_to_load_MWh_{load_type}"] = delivered
 
             for generator in self.generators:
+                source_type = _token(generator.output_energy_type)
                 if not generator.can_export:
-                    df.loc[index, f"{generator.name}_curtailed_MWh"] = available[generator.name]
+                    df.loc[index, f"{generator.name}_curtailed_MWh_{source_type}"] = available[generator.name]
                     continue
                 exported = max(
                     0.0,
@@ -215,16 +284,17 @@ class System:
                 )
                 available[generator.name] -= exported
                 site_dispatch[_site_name(generator)] += exported
-                df.loc[index, f"{generator.name}_to_grid_MWh"] = exported
-                df.loc[index, f"{generator.name}_curtailed_MWh"] = available[generator.name]
+                df.loc[index, f"{generator.name}_to_grid_MWh_{load_type}"] = exported
+                df.loc[index, f"{generator.name}_curtailed_MWh_{source_type}"] = available[generator.name]
 
             for storage in self.storage_systems:
-                df.loc[index, f"{storage.name}_MWh"] = states[storage.name]
-            df.loc[index, "grid_to_load_MWh"] = unmet
-            df.loc[index, "unmet_load_MWh"] = unmet
-            df.loc[index, "export_energy_MWh"] = sum(
-                df.loc[index, f"{generator.name}_to_grid_MWh"] for generator in self.generators
+                df.loc[index, f"{storage.name}_MWh_{_token(storage.stored_energy_type)}"] = states[storage.name]
+            df.loc[index, f"grid_to_load_MWh_{load_type}"] = unmet
+            df.loc[index, f"unmet_load_MWh_{load_type}"] = unmet
+            df.loc[index, f"export_energy_MWh_{load_type}"] = sum(
+                df.loc[index, f"{generator.name}_to_grid_MWh_{load_type}"]
+                for generator in self.generators
             )
             for site_name, dispatched in site_dispatch.items():
-                df.loc[index, f"{site_name}_POI_MW"] = dispatched
+                df.loc[index, f"{site_name}_POI_MW_{load_type}"] = dispatched
         return df

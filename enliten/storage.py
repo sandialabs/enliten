@@ -1,37 +1,69 @@
-"""Technology-agnostic storage assets used by :mod:`enliten.system`."""
+"""Technology-agnostic storage assets and charging-conversion paths."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Sequence
+
+from .generation import validate_energy_type
 
 
 NumberOrSeries = float | Sequence[float]
 
 
+@dataclass(frozen=True)
+class ChargingPath:
+    """A named conversion path from one generation asset into one store.
+
+    ``maximum_input_rate_MW`` is measured in the generation asset's source
+    energy type. ``input_to_stored_efficiency`` converts source MWh to stored
+    MWh. This allows, for example, a thermal CSP source to charge a thermal
+    store or an electrical battery at different rates and efficiencies.
+    """
+
+    generation_name: str
+    storage_name: str
+    source_energy_type: str
+    stored_energy_type: str
+    input_to_stored_efficiency: float
+    maximum_input_rate_MW: float | None = None
+    priority: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.generation_name or not self.storage_name:
+            raise ValueError("ChargingPath generation_name and storage_name must be non-empty.")
+        object.__setattr__(
+            self, "source_energy_type", validate_energy_type(self.source_energy_type, "source_energy_type")
+        )
+        object.__setattr__(
+            self, "stored_energy_type", validate_energy_type(self.stored_energy_type, "stored_energy_type")
+        )
+        if not 0 < self.input_to_stored_efficiency <= 1:
+            raise ValueError("ChargingPath input_to_stored_efficiency must be in (0, 1].")
+        if self.maximum_input_rate_MW is not None and self.maximum_input_rate_MW < 0:
+            raise ValueError("ChargingPath maximum_input_rate_MW must be non-negative.")
+
+
 @dataclass
 class Storage:
-    """A storage asset with named charging sources and explicit efficiencies.
+    """A store whose state of charge is tracked in ``stored_energy_type``.
 
-    ``capacity_MWh`` and state of charge are in the stored-energy unit. The
-    discharge efficiency converts stored energy to load-serving energy. It may
-    be a scalar or an hourly sequence (for example, a TES thermal-to-electric
-    conversion curve). ``power_rating_MW`` limits delivered power, while
-    ``charge_rate_MW`` limits input power.
-
-    A capacity is fully dispatchable by default. To retain a reserve, set
-    ``minimum_state_of_charge_MWh`` explicitly. This avoids silently
-    interpreting a technology label or a percent-DOD field as a dispatch rule.
+    ``power_rating_MW`` is the maximum power delivered in
+    ``load_output_energy_type``. ``discharge_efficiency`` converts stored MWh
+    into that output type and may be a scalar or hourly sequence. An optional
+    ``maximum_stored_energy_rate_MW`` caps the aggregate stored-energy added by
+    all charging paths in one hour; unlike input rates, it has one consistent
+    unit across all paths.
     """
 
     name: str
     site: object
     capacity_MWh: float
     power_rating_MW: float
-    systems_charging: Sequence[str]
-    charge_efficiency: float | Mapping[str, float] = 1.0
+    stored_energy_type: str = "electric"
+    load_output_energy_type: str = "electric"
     discharge_efficiency: NumberOrSeries = 1.0
-    charge_rate_MW: float | None = None
+    maximum_stored_energy_rate_MW: float | None = None
     minimum_state_of_charge_MWh: float = 0.0
     percent_loss_daily: float = 0.0
     start_full: bool = False
@@ -42,35 +74,24 @@ class Storage:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("Storage.name must be non-empty.")
+        self.stored_energy_type = validate_energy_type(
+            self.stored_energy_type, f"{self.name}.stored_energy_type"
+        )
+        self.load_output_energy_type = validate_energy_type(
+            self.load_output_energy_type, f"{self.name}.load_output_energy_type"
+        )
         if self.capacity_MWh < 0:
             raise ValueError(f"{self.name}: capacity_MWh must be non-negative.")
         if self.power_rating_MW < 0:
             raise ValueError(f"{self.name}: power_rating_MW must be non-negative.")
-        if self.charge_rate_MW is not None and self.charge_rate_MW < 0:
-            raise ValueError(f"{self.name}: charge_rate_MW must be non-negative.")
+        if self.maximum_stored_energy_rate_MW is not None and self.maximum_stored_energy_rate_MW < 0:
+            raise ValueError(f"{self.name}: maximum_stored_energy_rate_MW must be non-negative.")
         if not 0 <= self.minimum_state_of_charge_MWh <= self.capacity_MWh:
             raise ValueError(
                 f"{self.name}: minimum_state_of_charge_MWh must be within capacity_MWh."
             )
         if self.percent_loss_daily < 0:
             raise ValueError(f"{self.name}: percent_loss_daily must be non-negative.")
-        efficiencies = (
-            self.charge_efficiency.values()
-            if isinstance(self.charge_efficiency, Mapping)
-            else [self.charge_efficiency]
-        )
-        if any(value <= 0 or value > 1 for value in efficiencies):
-            raise ValueError(f"{self.name}: charge efficiency must be in (0, 1].")
-
-    def charge_efficiency_for(self, generation_name: str) -> float:
-        if isinstance(self.charge_efficiency, Mapping):
-            try:
-                return self.charge_efficiency[generation_name]
-            except KeyError as exc:
-                raise ValueError(
-                    f"{self.name}: no charge efficiency configured for {generation_name!r}."
-                ) from exc
-        return self.charge_efficiency
 
     def discharge_efficiency_at(self, hour: int) -> float:
         efficiency = self.discharge_efficiency

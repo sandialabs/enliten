@@ -2,7 +2,7 @@
 
 from .general import Site
 from .generation import Generation
-from .storage import Storage
+from .storage import ChargingPath, Storage
 from .system import System
 
-__all__ = ["Generation", "Site", "Storage", "System"]
+__all__ = ["ChargingPath", "Generation", "Site", "Storage", "System"]
