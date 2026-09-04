@@ -38,12 +38,12 @@ a production study.
 The included notebooks currently use the aligned 2023 PNM profiles in
 `examples/data/`: `PNM_demand.csv`, `PNM_pv_ac_1MW_av.csv`, and
 `PNM_csp_th_av.csv`. Each notebook validates the common UTC hourly index and
-uses the values in the units supplied. Its setup cell selects a study period
+uses the values in the units supplied. Its setup cell uses the complete aligned 2023 study year
 and declares explicit demand/PV/CSP multipliers. The illustrative microgrid defaults
 are 5% of the PNM demand, 3,000× PV availability, unscaled CSP thermal
 availability, a 750 MWh / 150 MW BES, and a 2,500 MWh-thermal / 150 MW-electric
 TES. These were deliberately chosen to show both grid-free and
-grid-dependent hours in January/July sample windows; they are not a PNM
+grid-dependent hours across the year; they are not a PNM
 planning recommendation. Override the named arguments for a study-specific
 sizing.
 
@@ -139,7 +139,7 @@ from the legacy bug-compatible result.
 annualized TEA inputs directly from that ledger: system/load/grid/export MWh,
 capex, fixed O&M, variable O&M, electricity-sale revenue, grid-purchase cost,
 and `system_augment`. Annual values are scaled from non-calendar fixture data
-or grouped by calendar year when the input has a `DatetimeIndex`.
+or scaled within each calendar year when the input has a `DatetimeIndex`.
 
 Use `resilience_cases` to run grid-unavailable dispatch with the same asset and
 conversion-path model:

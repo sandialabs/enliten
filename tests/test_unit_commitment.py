@@ -83,6 +83,15 @@ def test_normal_metrics_provide_tea_ready_annual_inputs():
     assert metrics["system_augment"] == metrics["system_augment_USD"]
 
 
+def test_partial_calendar_year_metrics_are_annualized():
+    index = pd.date_range("2023-07-01", periods=25, freq="h", tz="UTC")
+    generator = Generation("generator", Site("site"), [0.0] + [1.0] * 24, "electric")
+    system = System(pd.Series([1.0] * 25, index=index, name="load_MW"), [generator])
+
+    assert system.metrics["operating_hours"] == 24
+    assert system.metrics["system_to_load_annual_MWh_electric"] == pytest.approx([8760.0])
+
+
 def test_resilience_supports_seeded_user_defined_random_starts_and_metrics():
     system = fixture_pv_bes_system(hours=16)
     cases = system.resilience_cases(

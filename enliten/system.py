@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from calendar import isleap
 from itertools import cycle, islice
 from numbers import Real
 import random
@@ -287,7 +288,11 @@ class System:
 
     def _annual_values(self, series: pd.Series) -> list[float]:
         if isinstance(series.index, pd.DatetimeIndex):
-            return [float(value) for value in series.groupby(series.index.year).sum().tolist()]
+            annual_values = []
+            for year, values in series.groupby(series.index.year):
+                hours_in_year = 8784.0 if isleap(int(year)) else 8760.0
+                annual_values.append(float(values.sum() * hours_in_year / max(len(values), 1)))
+            return annual_values
         hours = max(len(series), 1)
         return [float(series.sum() * 8760.0 / hours)]
 

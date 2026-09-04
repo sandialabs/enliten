@@ -12,6 +12,7 @@ docs/_build/
 *.egg-info/
 
 .venv/
+.jupyter-runtime/
 
 *.pt
 
